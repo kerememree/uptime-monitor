@@ -1,110 +1,163 @@
+
+import sys
+import subprocess
+import pandas as pd
 import sqlite3
-import smtplib 
-from email.mime.text import MIMEText 
+import smtplib
+from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import pandas as pd 
+import os
+import random
+from datetime import datetime, timedelta
+
 
 DB_NAME = "uptime_logs.db"
 
 
-# Kodu denerken buraya kendi gerçek mail adresini ve uygulama şifreni yazmalısın.
-# DİKKAT: Gmail kullanıyorsan "Uygulama Şifresi" (App Password) oluşturman şart.
-SENDER_EMAIL = "*"
-SENDER_PASSWORD = "*" 
-RECEIVER_EMAIL = "*" 
-ALERT_THRESHOLD = 5 
+SENDER_EMAIL = "***"
+SENDER_PASSWORD = "***"
+RECEIVER_EMAIL = "***"
+
+
+ANOMALY_STD_DEV_FACTOR = 2.0  
+MIN_DATA_POINTS = 5           
+
+
+def create_dummy_data_if_not_exists():
+
+    if os.path.exists(DB_NAME):
+        return
+
+    print(" Veritabanı bulunamadı. Test için SAHTE VERİ oluşturuluyor...")
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS site_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            status_code INTEGER,
+            response_time REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    
+    print(" Midas sitesi için normal veriler ekleniyor (0.2s - 0.5s arası)...")
+    for _ in range(20):
+        t = random.uniform(0.2, 0.5)
+        cursor.execute("INSERT INTO site_logs (url, status_code, response_time) VALUES (?, ?, ?)", 
+                       ("midas.com.tr", 200, t))
+    
+    
+    print(" Midas sitesi için ANOMALİ verisi ekleniyor (2.5s!)...")
+    cursor.execute("INSERT INTO site_logs (url, status_code, response_time) VALUES (?, ?, ?)", 
+                   ("midas.com.tr", 200, 2.5))
+
+    
+    for _ in range(10):
+        t = random.uniform(0.1, 0.3)
+        cursor.execute("INSERT INTO site_logs (url, status_code, response_time) VALUES (?, ?, ?)", 
+                       ("google.com", 200, t))
+
+    conn.commit()
+    conn.close()
+    print(" Test veritabanı hazır!\n")
+
 
 def get_db_connection():
-    
     return sqlite3.connect(DB_NAME)
 
-def analyze_performance():
-    
+
+def detect_anomalies():
     conn = get_db_connection()
-    cursor = conn.cursor()
     
-    print("\n--- 📊 SİTE PERFORMANS RAPORU (Ortalama Yanıt Süresi) ---")
     
-    query = '''
-        SELECT url, AVG(response_time) as avg_time, MAX(response_time) as max_time
-        FROM site_logs 
-        WHERE status_code = 200 
-        GROUP BY url
-        ORDER BY avg_time ASC
-    '''
-    
-    cursor.execute(query)
-    results = cursor.fetchall()
-    
-    print(f"{'URL':<30} | {'ORTALAMA (sn)':<15} | {'EN YAVAŞ (sn)':<15}")
-    print("-" * 65)
-    for row in results:
-        url = row[0].replace("https://", "").replace("www.", "")
-        avg_time = round(row[1], 4)
-        max_time = round(row[2], 4)
-        print(f"{url:<30} | {avg_time:<15} | {max_time:<15}")
-    
+    query = "SELECT url, response_time FROM site_logs WHERE status_code = 200"
+    df = pd.read_sql_query(query, conn)
     conn.close()
+
+    if df.empty:
+        return []
+
+    anomalies = []
+    
+    print(f"\n ---  PERFORMANS ANALİZİ ---")
+    print(f"{'URL':<20} | {'ORTALAMA':<10} | {'ŞU AN':<10} | {'DURUM'}")
+    print("-" * 60)
+
+    for url in df['url'].unique():
+        site_data = df[df['url'] == url]
+        
+        if len(site_data) < MIN_DATA_POINTS:
+            continue
+            
+        
+        mean_time = site_data['response_time'].mean()
+        std_dev = site_data['response_time'].std()
+        
+        
+        last_entry_time = site_data.iloc[-1]['response_time']
+        
+        
+        limit = mean_time + (ANOMALY_STD_DEV_FACTOR * std_dev)
+        
+        is_anomaly = last_entry_time > limit
+        status = " ANOMALİ" if is_anomaly else " NORMAL"
+        
+        print(f"{url:<20} | {mean_time:.3f}s     | {last_entry_time:.3f}s     | {status}")
+        
+        if is_anomaly:
+            msg = f"- {url}: Yanıt süresi {last_entry_time:.2f}s (Normali: {mean_time:.2f}s). Beklenmedik yavaşlama!"
+            anomalies.append(msg)
+            
+    return anomalies
+
 
 def analyze_errors():
-    
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    print("\n\n--- ⚠️ HATA RAPORU (Erişilemeyen Siteler) ---")
     
-    query = '''
-        SELECT url, status_code, COUNT(*) as error_count, MAX(timestamp) as last_seen
-        FROM site_logs
-        WHERE status_code != 200
+    cursor.execute('''
+        SELECT url, status_code, COUNT(*) 
+        FROM site_logs 
+        WHERE status_code != 200 
         GROUP BY url, status_code
-    '''
-    
-    cursor.execute(query)
+    ''')
     results = cursor.fetchall()
-    
-    error_summary = [] 
-    total_error_count = 0
-    
-    if not results:
-        print("Hiçbir sitede hata bulunamadı.")
-    else:
-        print(f"{'URL':<30} | {'HATA KODU':<10} | {'TEKRAR':<8} | {'SON GÖRÜLME'}")
-        print("-" * 75)
-        for row in results:
-            url = row[0].replace("https://", "")
-            code = row[1]
-            count = row[2]
-            last_seen = row[3]
-            
-            print(f"{url:<30} | {code:<10} | {count:<8} | {last_seen}")
-            
-            
-            error_summary.append(f"- {url}: Hata Kodu {code} ({count} kez)")
-            total_error_count += count
-
     conn.close()
-    return total_error_count, error_summary
+    
+    error_summary = []
+    total_count = 0
+    for row in results:
+        error_summary.append(f"- {row[0]}: Hata Kodu {row[1]} ({row[2]} kez)")
+        total_count += row[2]
+        
+    return total_count, error_summary
 
-def send_alert_email(error_count, error_details_list):
+
+def send_smart_alert(error_count, error_details, anomaly_details):
+    print("\n  Rapor oluşturuluyor...")
     
-    subject = f"UYARI: {error_count} Adet Erişim Hatası Tespit Edildi."
-    
-    
-    details_text = "\n".join(error_details_list)
+    # E-mail ayarları boşsa sadece ekrana yazıp çıkalım
+    if "gmail.com" not in SENDER_EMAIL or "sifre" in SENDER_PASSWORD:
+        print(" E-mail ayarları yapılmadığı için mail gönderilemedi (Console Log Sadece).")
+        print(" DETAYLAR:")
+        if error_details: print("Hatalar:\n" + "\n".join(error_details))
+        if anomaly_details: print("Anomaliler:\n" + "\n".join(anomaly_details))
+        return
+
+    subject = " Uyarı: Sistemde Düzensizlik Tespit Edildi"
     body = f"""
-    Merhaba,
+    Sistem İzleme Raporu
+    --------------------
     
-    Sistem izleme botu (Uptime Monitor) son analizde kritik seviyede hata tespit etti.
+    1. ERİŞİM HATALARI:
+    Toplam: {error_count}
+    {chr(10).join(error_details) if error_details else "Yok."}
     
-    TOPLAM HATA SAYISI: {error_count} (Eşik Değer: {ALERT_THRESHOLD})
-    
-    DETAYLAR:
-    {details_text}
-    
-    Lütfen sunucuları veya hedef siteleri kontrol ediniz.
-    
-    Kerem Emre
+    2. PERFORMANS ANOMALİLERİ (AI Tespiti):
+    {chr(10).join(anomaly_details) if anomaly_details else "Yok."}
     """
     
     msg = MIMEMultipart()
@@ -114,33 +167,30 @@ def send_alert_email(error_count, error_details_list):
     msg.attach(MIMEText(body, 'plain'))
     
     try:
-        
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        text = msg.as_string()
-        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, text)
+        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
         server.quit()
-        print(f"\n[BAŞARILI] Uyarı maili gönderildi: {RECEIVER_EMAIL}")
+        print(f" Mail başarıyla gönderildi: {RECEIVER_EMAIL}")
     except Exception as e:
-        print(f"\n[HATA] Mail gönderilemedi. Hata detayı: {e}")
-        
+        print(f" Mail gönderme hatası: {e}")
 
-def automated_health_check():
-   
-    print("\n--- OTOMATİK KONTROL BAŞLIYOR ---")
-    
-    
-    total_errors, error_details = analyze_errors()
-    
-    
-    print(f"\n[KARAR MEKANİZMASI] Toplam Hata: {total_errors} | Eşik: {ALERT_THRESHOLD}")
-    
-    if total_errors >= ALERT_THRESHOLD:
-        print("DURUM: Eşik aşıldı. Alarm veriliyor...")
-        send_alert_email(total_errors, error_details)
-    else:
-        print("🟢 DURUM: Hata sayısı eşik değerin altında.")
 
 if __name__ == "__main__":
-    automated_health_check()
+    # 1. Test verisi oluştur (Sadece veritabanı yoksa çalışır)
+    create_dummy_data_if_not_exists()
+    
+    print("\n---  KONTROL BAŞLIYOR ---")
+    
+    # 2. Hataları Analiz Et
+    err_count, err_details = analyze_errors()
+    
+    # 3. Anomalileri Tespit Et
+    anomalies = detect_anomalies()
+    
+    # 4. Sonuç
+    if err_count > 0 or anomalies:
+        send_smart_alert(err_count, err_details, anomalies)
+    else:
+        print("\n SİSTEM STABİL: Herhangi bir sorun tespit edilmedi.")

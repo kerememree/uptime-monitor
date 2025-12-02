@@ -1,10 +1,8 @@
-Website Uptime & Performance Monitor
+AI Powered Uptime Monitor
 
-Bu proje, belirlenen web sitelerinin erişilebilirliğini (uptime) ve yanıt sürelerini (response time) 7/24 izleyen, verileri SQL veritabanında saklayan ve kritik durumlarda otomatik e-posta bildirimi gönderen bir Python otomasyon aracıdır.
+Bu proje, web sitelerinin sağlık durumunu izleyen, SQL veritabanında loglayan ve İstatistiksel Anomali Tespiti (Statistical Anomaly Detection) yöntemlerini kullanarak "gizli yavaşlamaları" tespit eden akıllı bir izleme sistemidir.
 
-Projenin Amacı
-
-Test Mühendisliği ve SRE (Site Reliability Engineering) pratiklerini uygulamak amacıyla geliştirilmiştir. Manuel kontroller yerine, sistemin sağlık durumunu otomatize edilmiş scriptlerle izlemeyi hedefler.
+Geleneksel izleme araçları sadece site çöktüğünde (HTTP 500/404) haber verirken, bu AIOps aracı, site çökmese bile normalden sapan performans düşüşlerini (Latent Anomalies) algılar ve yöneticiyi uyarır.
 
 Kullanılan Teknolojiler
 
@@ -18,28 +16,26 @@ SQL: Performans metriklerinin analizi ve raporlanması.
 
 Requests: HTTP protokolü üzerinden veri toplama.
 
+Pandas: Zaman serisi analizi ve istatistiksel hesaplamalar
+
 Özellikler
 
-1. Veri Toplama (Monitoring)
+1. AI Tabanlı Anomali Tespiti
 
-Hedef sitelere HTTP GET istekleri atar.
+Teknoloji: Python Pandas & İstatistiksel Analiz (Z-Score Mantığı).
 
-Yanıt sürelerini (latency) milisaniye cinsinden ölçer.
+Mantık: Sistemin geçmiş performans verilerini (Historical Data) analiz eder. Ortalama yanıt süresinden Standard Deviation (Standart Sapma) kadar sapan istekleri "Anomali" olarak işaretler.
 
-HTTP Durum Kodlarını (200, 404, 500 vb.) analiz eder.
+Fayda: Kullanıcılar şikayet etmeden önce performans darboğazlarını (bottlenecks) yakalar.
 
-Bağlantı hatalarını (Connection Error) yakalar ve loglar.
+2. Veri Toplama ve SQL Loglama
 
-2. Veri Analizi ve Raporlama
+Hedef siteleri belirli aralıklarla pingler.
 
-Toplanan verileri SQLite veritabanına yazar.
+HTTP Status Code, Response Time ve Timestamp verilerini SQLite veritabanına yapısal olarak kaydeder.
 
-SQL sorguları ile sitelerin ortalama açılma hızlarını hesaplar.
+3. Akıllı Alarm Sistemi (Smart Alerting)
 
-Hata oranlarını analiz eder.
+Sadece hata durumunda değil, anomali tespit edildiğinde de devreye girer.
 
-3. Otomatik Alarm Sistemi (Alerting)
-
-Sistemdeki hata sayısı belirlenen eşik değeri (Threshold) geçerse devreye girer.
-
-Yöneticiye, hata detaylarını içeren bir e-posta gönderir.
+SMTP protokolü üzerinden detaylı bir "Olay Raporu" (Incident Report) gönderir.
