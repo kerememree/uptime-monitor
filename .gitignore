@@ -1,0 +1,14 @@
+# Python cache dosyalarını yükleme
+__pycache__/
+*.pyc
+
+# Veritabanı dosyasını yükleme 
+*.db
+uptime_logs.db
+
+
+.env
+
+# VS Code veya sistem dosyaları
+.vscode/
+.DS_Store
